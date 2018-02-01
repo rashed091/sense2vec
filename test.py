@@ -64,7 +64,7 @@ def load_and_transform(batch_id, in_loc, out_dir):
     if path.exists(out_loc):
         return None
     print('Batch', batch_id)
-    nlp = spacy.en.English(parser=False, tagger=False, matcher=False, entity=False)
+    nlp = spacy.load('en_core_web_sm', disable=['parser', 'ner'])
     with io.open(out_loc, 'w', encoding='utf8') as out_file:
         with io.open(in_loc, 'rb') as in_file:
             for byte_string in Doc.read_bytes(in_file):
@@ -110,19 +110,6 @@ def represent_word(word):
         tag = '?'
     return text + '|' + tag
 
-
-def batch_processing(inp, out, docs):
-    t1 = time.time()
-    n = 0
-    for doc in docs:
-        parse_and_transform(n, doc, out)
-        if n == 100:
-            break
-        n += 1
-    t2 = time.time()
-    print("%Total time: %.3f" % (t2 - t1))
-
-
 def main(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4, load_parses=False):
     if not path.exists(out_dir):
         path.join(out_dir)
@@ -139,6 +126,7 @@ def main(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Worksp
     batches = partition(50000, iter_comments(in_loc))
     for i, batch in enumerate(batches):
         parse_and_transform(i, batch, out_dir)
+        print('Batch# {} is completed!'.format(i))
         break
     t2 = time.time()
     print("Total time: %.3f" % (t2 - t1))
