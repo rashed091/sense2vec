@@ -1,13 +1,10 @@
 from __future__ import print_function, unicode_literals, division
 import io
-import bz2
 import logging
 from os import path
 import os
 import random
 from collections import defaultdict
-
-import plac
 
 try:
     import ujson as json
@@ -65,25 +62,9 @@ def iter_dir(loc):
             yield path.join(loc, fn)
 
 
-@plac.annotations(
-    in_dir=("Location of input directory"),
-    out_loc=("Location of output file"),
-    n_workers=("Number of workers", "option", "n", int),
-    size=("Dimension of the word vectors", "option", "d", int),
-    window=("Context window size", "option", "w", int),
-    min_count=("Min count", "option", "m", int),
-    negative=("Number of negative samples", "option", "g", int),
-    nr_iter=("Number of iterations", "option", "i", int),
-)
-def main(in_dir, out_loc, negative=5, n_workers=4, window=5, size=128, min_count=10, nr_iter=2):
+def main(in_dir='D:\Workspace\sense2vec\\train', out_loc='D:\Workspace\sense2vec\\train\\vector.bin', negative=5, n_workers=4, window=5, size=128, min_count=10, nr_iter=2):
     logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
-    model = Word2Vec(
-        size=size,
-        window=window,
-        min_count=min_count,
-        workers=n_workers,
-        sample=1e-5,
-        negative=negative
+    model = Word2Vec(size=size, window=window, min_count=min_count, workers=n_workers, sample=1e-5, negative=negative
     )
     corpus = Corpus(in_dir)
     total_words = 0
@@ -101,12 +82,11 @@ def main(in_dir, out_loc, negative=5, n_workers=4, window=5, size=128, min_count
         model.raw_vocab[string] = corpus.counts[key]
     model.scale_vocab()
     model.finalize_vocab()
-    model.iter = nr_iter
-    model.train(corpus)
+    model.train(corpus, total_examples=total_sents, total_words=total_words, epochs=nr_iter)
 
     model.save(out_loc)
 
 
 if __name__ == '__main__':
-    plac.call(main)
+    main()
 
