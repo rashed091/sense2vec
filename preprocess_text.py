@@ -67,7 +67,13 @@ def parse_and_transform(batch_id, input_, out_dir):
     nlp = spacy.load('en_core_web_sm')
     with io.open(out_loc, 'w', encoding='utf8') as file_:
         for text in input_:
-            file_.write(transform_doc(nlp(strip_meta(text))))
+            try:
+                doc =nlp(strip_meta(text))
+                file_.write(transform_doc(doc))
+            except Exception as e:
+                print(strip_meta(text))
+                print('Error occured here?')
+
 
 
 def transform_doc(doc):
@@ -97,6 +103,14 @@ def represent_word(word):
     return text + '|' + tag
 
 
+def batch_process(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4):
+    if not path.exists(out_dir):
+        path.join(out_dir)
+    jobs = partition(50000, iter_comments(in_loc))
+    do_work = parse_and_transform
+    parallelize(do_work, enumerate(jobs), n_workers, [out_dir])
+
+
 def main(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4, load_parses=False):
     if not path.exists(out_dir):
         path.join(out_dir)
@@ -112,4 +126,5 @@ def main(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Worksp
 
 
 if __name__ == '__main__':
-    main()
+    # main()
+    batch_process()
