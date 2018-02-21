@@ -103,7 +103,7 @@ def represent_word(word):
     return text + '|' + tag
 
 
-def batch_process(in_loc='D:\Workspace\sense2vec\data\RC_2009-01.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4):
+def batch_process(in_loc='D:\Workspace\sense2vec\data\RC_2016-05.bz2', out_dir="D:\Workspace\sense2vec\data", n_workers=4):
     if not path.exists(out_dir):
         path.join(out_dir)
     jobs = partition(50000, iter_comments(in_loc))
