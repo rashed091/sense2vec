@@ -18,3 +18,14 @@
 - #### check systemctl status space-file-processing.service
 
 - #### **Done!**
+
+# How To Stop the daemon and kill the running process
+
+- **systemctl stop/disable space-file-processing.service**
+
+- **systemctl stop/disable space-file-processing.timer**
+
+- **sudo kill -9 process_id**
+
+  
+
