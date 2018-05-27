@@ -1,0 +1,11 @@
+[Unit]
+Description=run spacy-file-processing every 2 minutes
+
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*:0/2
+Unit=spacy-file-processing.service
+
+[Install]
+WantedBy=default.target

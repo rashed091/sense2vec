@@ -1,0 +1,11 @@
+[Unit]
+Description=daily backup work
+
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /home/newscred/flask-app/start-new-worker.sh
+
+[Install]
+WantedBy=default.target
+

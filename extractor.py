@@ -1,25 +1,22 @@
-from __future__ import unicode_literals, division
+from __future__ import print_function, unicode_literals, division
 
-import spacy
-import sys
-import argparse
-import bz2
-import fileinput
-import os.path
+import glob
+import os
+import io
 import re
-import ujson
-from io import StringIO
-from toolz import partition
+import uuid
+import shutil
 from timeit import default_timer
+from multiprocessing import cpu_count
+
+import ujson
+import spacy
+from toolz import partition_all
+from joblib import Parallel, delayed
+from settings import OUTPUT_DIR, INPUT_DIR
 
 
-# ===========================================================================
-pre_format_re = re.compile(r'^[\`\*\~]')
-post_format_re = re.compile(r'[\`\*\~]$')
-url_re = re.compile(r'\[([^]]+)\]\(%%URL\)')
-link_re = re.compile(r'\[([^]]+)\]\(https?://[^\)]+\)')
 
-# ===========================================================================
 LABELS = {
     'ENT': 'ENT',
     'PERSON': 'ENT',
@@ -42,238 +39,113 @@ LABELS = {
     'CARDINAL': 'CARDINAL'
 }
 
-# ======================================================================
 
-class Extractor(object):
-    """
-    An extraction task on a article.
-    """
-    def __init__(self):
-        self.nlp = spacy.load('en_core_web_sm')
-
-    def write_output(self, out, text):
-        """
-        :param out: a memory file
-        :param text: the text of the page
-        """
-        if out == sys.stdout:  # option -a or -o -
-            text = text.encode('utf-8')
-        out.write(str(text))
-        out.write('\n')
-
-    def extract(self, text, out):
-        """
-        :param out: a memory file.
-        """
-        text = self.strip_meta(text)
-
-        doc = self.nlp(text)
-        text = self.transform_doc(doc)
-        self.write_output(out, text)
-
-    def strip_meta(self, text):
-        # residuals of unbalanced quotes
-        text = link_re.sub(r'\1', text)
-        text = text.replace('&gt;', '>').replace('&lt;', '<')
-        text = pre_format_re.sub('', text)
-        text = post_format_re.sub('', text)
-        text = text.replace('\\', '')
-        return text
+def parallelize(func, iterator, n_jobs, extra):
+    extra = tuple(extra)
+    return Parallel(n_jobs=n_jobs)(delayed(func)(*(item + extra)) for item in iterator)
 
 
-    def transform_doc(self, doc):
-        for ent in doc.ents:
-            ent.merge(tag=ent.root.tag_, lemma=ent.text, ent_type=LABELS[ent.label_])
-        for np in doc.noun_chunks:
-            while len(np) > 1 and np[0].dep_ not in ('advmod', 'amod', 'compound'):
-                np = np[1:]
-            np.merge(tag=np.root.tag_, lemma=np.text, ent_type=np.root.ent_type_)
-        strings = []
-        for sent in doc.sents:
-            if sent.text.strip():
-                strings.append(' '.join(self.represent_word(w) for w in sent if not w.is_space))
-        if strings:
-            return '\n'.join(strings) + '\n'
-        else:
-            return ''
-
-    def represent_word(self, word):
-        if word.like_url:
-            return '%%URL|X'
-        text = re.sub(r'\s', '_', word.text)
-        tag = LABELS.get(word.ent_type_, word.pos_)
-        if not tag:
-            tag = '?'
-        return text + '|' + tag
-
-# ----------------------------------------------------------------------
-# Output
+def read_files(loc):
+    with io.open(loc, encoding='utf-8') as file_:
+        for i, line in enumerate(file_):
+            yield line
 
 
-class NextFile(object):
-    """
-    Synchronous generation of next available file name.
-    """
+def strip_meta(text):
+    pre_format_re = re.compile(r'^[\`\*\~]')
+    post_format_re = re.compile(r'[\`\*\~]$')
+    link_re = re.compile(r'\[([^]]+)\]\(https?://[^\)]+\)')
 
-    filesPerDir = 100
-
-    def __init__(self, path_name):
-        self.path_name = path_name
-        self.dir_index = -1
-        self.file_index = -1
-
-    def __next__(self):
-        self.file_index = (self.file_index + 1) % NextFile.filesPerDir
-        if self.file_index == 0:
-            self.dir_index += 1
-        dirname = self._dirname()
-        if not os.path.isdir(dirname):
-            os.makedirs(dirname)
-        return self._filepath()
-
-    next = __next__
-
-    def _dirname(self):
-        char1 = self.dir_index % 26
-        char2 = self.dir_index // 26 % 26
-        return os.path.join(self.path_name, '%c%c' % (ord('A') + char2, ord('A') + char1))
-
-    def _filepath(self):
-        return '%s/reddit_%02d' % (self._dirname(), self.file_index)
+    text = link_re.sub(r'\1', text)
+    text = text.replace('&gt;', '>').replace('&lt;', '<')
+    text = pre_format_re.sub('', text)
+    text = post_format_re.sub('', text)
+    return text
 
 
-class OutputSplitter(object):
-    """
-    File-like object, that splits output to multiple files of a given max size.
-    """
+def parse_and_transform(batch_id, input_, out_dir):
+    out_loc = os.path.join(out_dir, '%d.txt' % batch_id)
+    if os.path.exists(out_loc):
+        return None
 
-    def __init__(self, nextFile, max_file_size=0, compress=True):
-        """
-        :param nextFile: a NextFile object from which to obtain filenames
-            to use.
-        :param max_file_size: the maximum size of each file.
-        :para compress: whether to write data with bzip compression.
-        """
-        self.nextFile = nextFile
-        self.compress = compress
-        self.max_file_size = max_file_size
-        self.file = self.open(next(self.nextFile))
+    print('Batch', batch_id)
+    nlp = spacy.load('en_core_web_sm', disable=['textcat'])
+    temp_loc = os.path.join(os.path.join(out_dir, "__temp__"), uuid.uuid4().hex)
 
-    def reserve(self, size):
-        if self.file.tell() + size > self.max_file_size:
-            self.close()
-            self.file = self.open(next(self.nextFile))
+    with io.open(temp_loc, 'w', encoding='utf8') as file_:
+        for text in input_:
+            try:
+                doc = nlp(text)
+                file_.write(transform_doc(doc))
+            except:
+                continue
 
-    def write(self, data):
-        # self.reserve(len(data))
-        self.file.write(data)
-
-    def close(self):
-        self.file.close()
-
-    def open(self, filename):
-        if self.compress:
-            return bz2.BZ2File(filename + '.bz2', 'w')
-        else:
-            return open(filename, 'wb')
+        file_.close()
+        shutil.copyfile(temp_loc, out_loc)
+        os.remove(temp_loc)
 
 
-# ----------------------------------------------------------------------
-
-def extraction_process(input_file, out_file, file_size, batch=None):
-    print("Starting page extraction from {}.".format(input_file))
-    extract_start = default_timer()
-
-    if input_file and batch:
-        comments = batch
+def transform_doc(doc):
+    for ent in doc.ents:
+        ent.merge(tag=ent.root.tag_, lemma=ent.text, ent_type=LABELS[ent.label_])
+    for np in doc.noun_chunks:
+        while len(np) > 1 and np[0].dep_ not in ('advmod', 'amod', 'compound'):
+            np = np[1:]
+        np.merge(tag=np.root.tag_, lemma=np.text, ent_type=np.root.ent_type_)
+    strings = []
+    for sent in doc.sents:
+        if sent.text.strip():
+            strings.append(' '.join(represent_word(w) for w in sent if not w.is_space))
+    if strings:
+        return '\n'.join(strings) + '\n'
     else:
-        input = fileinput.FileInput(input_file, openhook=fileinput.hook_compressed)
-        comments = text_from(input)
-        print('Total comments #{}'.format(len(comments)))
-    if out_file:
-        nextFile = NextFile(out_file)
-        output = OutputSplitter(nextFile, file_size)
+        return ''
 
-    out = StringIO()  # memory buffer
-    e = Extractor()
-    i = 1
-    for comment in comments:
-        if i < 279136:
-            i += 1
-            continue
-        print(comments)
-        e.extract(comment, out)
-        text = out.getvalue()
-        output.write(text.encode('utf-8'))
-        out.truncate(0)
-        out.seek(0)
-        print("Finished processing #{}".format(i))
-        i += 1
 
-    out.close()
-    input.close()
+def represent_word(word):
+    if word.like_url:
+        return '%%URL|X'
 
-    if output != sys.stdout:
-        output.close()
+    text = re.sub(r'\s', '_', word.text)
+    tag = LABELS.get(word.ent_type_, word.pos_)
+    if not tag:
+        tag = '?'
+    return text + '|' + tag
 
-    extract_duration = default_timer() - extract_start
-    print('Finished extraction of all comments in {}'.format(extract_duration))
 
-# ----------------------------------------------------------------------
-def text_from(file_):
-    comments = []
-    for i, line in enumerate(file_):
+def create_dir_if_not_exists(dir_path):
+    if not os.path.isdir(dir_path):
         try:
-            text = ujson.loads(line)
-            comments.append(text.get('body'))
-        except:
-            continue
-    return comments
+            os.makedirs(dir_path)
+        except Exception as e:
+            print(e)
 
 
-def iter_comments(file_):
-    for i, line in enumerate(file_):
-        yield ujson.loads(line)['body']
+def process_file(file_name):
+    in_loc = os.path.join(INPUT_DIR, '{}'.format(file_name))
+    jobs = partition_all(10000, read_files(in_loc))
 
-# ----------------------------------------------------------------------
+    worker = max(1, cpu_count() - 2)
 
-def main():
-    parser = argparse.ArgumentParser(prog=os.path.basename(sys.argv[0]),
-                                     formatter_class=argparse.RawDescriptionHelpFormatter,
-                                     description=__doc__)
-    parser.add_argument("input",
-                        help="XML wiki dump file")
-    groupO = parser.add_argument_group('Output')
-    groupO.add_argument("-o", "--output", default="text",
-                        help="directory for extracted files (or '-' for dumping to stdout)")
-    parser.add_argument("--batch", type=bool, default=False,
-                        help="Process input file in batches")
+    output_path = os.path.join(OUTPUT_DIR, file_name)
+    temp_path = os.path.join(output_path, "__temp__")
 
-    args = parser.parse_args()
-    input_file = args.input
-    batch_input = args.batch
+    create_dir_if_not_exists(output_path)
+    create_dir_if_not_exists(temp_path)
 
-    output_path = args.output
-    if output_path != '-' and not os.path.isdir(output_path):
-        try:
-            os.makedirs(output_path)
-        except:
-            return
-    # Minimum size of output files
-    file_size = 2000 * 1024
+    start_time = default_timer()
+    parallelize(parse_and_transform, enumerate(jobs), worker, [output_path])
+    end_time = default_timer()
 
-    if not batch_input:
-        extraction_process(input_file, output_path, file_size)
-    else:
-        t1 = default_timer()
-        batches = partition(2000000, iter_comments(input_file))
-        for i, batch in enumerate(batches):
-            extraction_process(input_file, output_path, file_size, batch)
-            print('Batch# {} is completed!'.format(i))
-        t2 = default_timer()
-        print("Total time: %.3f" % (t2 - t1))
-
+    print('Execution Time: {}'.format(end_time - start_time))
+    shutil.rmtree(temp_path)
 
 
 if __name__ == '__main__':
-    main()
+    for file_name in glob.glob(INPUT_DIR + '/*'):
+        name = file_name.split('/')[-1]
+        if name == 'README.md':
+            continue
+        process_file(name)
+
+
