@@ -63,14 +63,14 @@ def strip_meta(text):
     return text
 
 
-def parse_and_transform(batch_id, input_, out_dir):
+def parse_and_transform(batch_id, input_, out_dir, temp_dir):
     out_loc = os.path.join(out_dir, '%d.txt' % batch_id)
     if os.path.exists(out_loc):
         return None
 
     print('Batch', batch_id)
     nlp = spacy.load('en_core_web_sm', disable=['textcat'])
-    temp_loc = os.path.join(os.path.join(out_dir, "__temp__"), uuid.uuid4().hex)
+    temp_loc = os.path.join(temp_dir, uuid.uuid4().hex)
 
     with io.open(temp_loc, 'w', encoding='utf8') as file_:
         for text in input_:
@@ -137,7 +137,7 @@ def process_file(file_name):
     create_dir_if_not_exists(temp_path)
 
     start_time = default_timer()
-    parallelize(parse_and_transform, enumerate(jobs), worker, [output_path])
+    parallelize(parse_and_transform, enumerate(jobs), worker, [output_path, temp_path])
     end_time = default_timer()
 
     print('Execution Time: {}'.format(end_time - start_time))
