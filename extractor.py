@@ -116,9 +116,12 @@ def represent_word(word):
 def create_dir_if_not_exists(dir_path):
     if not os.path.isdir(dir_path):
         try:
-            os.makedirs(dir_path)
+            original_umask = os.umask(0)
+            os.makedirs(dir_path, 777)
         except Exception as e:
             print(e)
+        finally:
+            os.umask(original_umask)
 
 
 def process_file(file_name):
@@ -128,7 +131,7 @@ def process_file(file_name):
     worker = max(1, cpu_count() - 2)
 
     output_path = os.path.join(OUTPUT_DIR, file_name)
-    temp_path = os.path.join(output_path, "__temp__")
+    temp_path = os.path.join(OUTPUT_DIR, "__temp__")
 
     create_dir_if_not_exists(output_path)
     create_dir_if_not_exists(temp_path)
@@ -138,7 +141,6 @@ def process_file(file_name):
     end_time = default_timer()
 
     print('Execution Time: {}'.format(end_time - start_time))
-    shutil.rmtree(temp_path)
 
 
 if __name__ == '__main__':
