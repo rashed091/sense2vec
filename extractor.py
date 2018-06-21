@@ -70,8 +70,9 @@ def parse_and_transform(batch_id, input_, out_dir, temp_dir):
 
     print('Batch', batch_id)
     nlp = spacy.load('en_core_web_sm', disable=['textcat'])
-    temp_loc = os.path.join(temp_dir, uuid.uuid4().hex)
 
+    temp_loc = os.path.join(temp_dir, uuid.uuid4().hex)
+    
     with io.open(temp_loc, 'w', encoding='utf8') as file_:
         for text in input_:
             try:
@@ -81,7 +82,7 @@ def parse_and_transform(batch_id, input_, out_dir, temp_dir):
                 continue
 
         file_.close()
-        shutil.copyfile(temp_loc, out_loc)
+        shutil.copy(temp_loc, out_loc)
         os.remove(temp_loc)
 
 
@@ -117,7 +118,8 @@ def create_dir_if_not_exists(dir_path):
     if not os.path.isdir(dir_path):
         try:
             original_umask = os.umask(0)
-            os.makedirs(dir_path, 777)
+            os.mkdir(dir_path)
+
         except Exception as e:
             print(e)
         finally:
